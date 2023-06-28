@@ -3,11 +3,26 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 import os
-import yaml
 
-def read_yaml(file_path):
-    with open(file_path, "r") as f:
-        return yaml.safe_load(f)
+### USER parameters ###
+projname = 'data_volume_sensitivity_p0.01'
+f_dataset = '~/data/p01_all_samples_output_cleaned_shuffled.nc'
+vars_input  = ['tair', 'pressure', 'rh', 'wbar', 'num_aer', 'r_aer', 'kappa']
+vars_output = ['fn']
+validation_split = 0.2
+compile_opt = {'optimizer': 'Adam',
+               'loss': 'mse',
+               'metrics': ['mae']
+              }
+search_opt = {'objective': "val_loss",
+              'overwrite': False,
+              'executions_per_trial': 1,
+              'max_trials': 10000,
+              'directory': './results'
+             }
+batch_size = 1024
+max_epochs = 100 # Note that 'EarlyStoppoing' is enforced.
+####
 
 def set_environment(num_gpus_per_node="8"):
     nodename = os.environ['SLURMD_NODENAME']
@@ -42,19 +57,8 @@ def vectorize(ds:xr.Dataset, v:list):
     return train_input_vectorized.values
 
 def main():
-    # EAGLES variables:
-    # input_vars: ['tair', 'pressure', 'rh', 'wbar', 'sigmag', 'num_aer', 'r_aer', 'kappa']
-    # output_vars: ['fn', 'fm', 'fluxm', 'fluxn', 'smax']
-    # extra_output_vars: ['bad_samples', 'timed_out', 'super_cooled']
-
-    #0 Load CONFIG File
-    CONFIG = read_yaml("./config/Task01_Run01_data-volume-p01.yml")
-    projname = "%s%.2f"%(CONFIG['project']['prefix'], CONFIG['dataset']['volume_factor_effective'])
-    print("CONFIG File: %s"%CONFIG)
-    print("Project Name:: %s"%projname)
-
-    #1 Load
-    f_orig = xr.open_dataset(CONFIG['dataset']['file_path']) #, chunks={'nsamples':1048576}) # just hardwire
+    #1 Load training dataset
+    f_orig = xr.open_dataset(f_dataset)
 
     # Cleaning bad samples
     # (The input data is already cleaned, so not cleaning here again)
@@ -75,8 +79,8 @@ def main():
         f_orig=f_orig.isel(nsamples=ind_keep)
         
     #2 Select variables relevant for emulator 
-    f_train  = f_orig[[ *CONFIG['variables']['input'], *CONFIG['variables']['output'] ]]
-    f_train0 = f_orig[[ *CONFIG['variables']['input'], *CONFIG['variables']['output'] ]] # copy
+    f_train  = f_orig[vars_input]  # for input  -> gonna be normalized
+    f_train0 = f_orig[vars_output] # for output -> not
 
     #5 Normalize
     mu    = f_train.mean('nsamples')
@@ -86,18 +90,15 @@ def main():
 
     #6 Vectorize input / output
     # (f_train is normalized, but f_train0 is not)
-    input_vars =  CONFIG['variables']['input']
-    output_vars = CONFIG['variables']['output']
-    train_input_vectorized  = vectorize(f_train,  input_vars)  # using f_train
-    train_output_vectorized = vectorize(f_train0, output_vars) # using f_train0
+    train_input_vectorized  = vectorize(f_train,  vars_input)  # using f_train
+    train_output_vectorized = vectorize(f_train0, vars_output) # using f_train0
 
     #6.b divide train into train vs validation
-    split = CONFIG['dataset']['validation_split']
     n_train = train_input_vectorized.shape[0]
-    n_val = int(n_train*split)
-    x_val = train_input_vectorized[:n_val]
+    n_val   = int(n_train * validation_split)
+    x_val   = train_input_vectorized[:n_val]
     x_train = train_input_vectorized[n_val:]
-    y_val = train_output_vectorized[:n_val]
+    y_val   = train_output_vectorized[:n_val]
     y_train = train_output_vectorized[n_val:]
 
     # training
@@ -120,28 +121,34 @@ def main():
             )
 
         model.add(layers.Dense(train_output_vectorized.shape[1], activation='sigmoid'))
-        model.compile(**CONFIG['compile'])
+        model.compile(**compile_opt)
 
         return model
 
     # search set up
-    tuner = kt.RandomSearch(
-                            build_model,
+    tuner = kt.RandomSearch(build_model,
                             project_name = projname,
-                            **CONFIG['RandomSearch']
+                            **search_opt
                            )
     tuner.search_space_summary()
 
     # search
     tuner.search(x_train, y_train,
-                 validation_data=(x_val, y_val),
-                 **CONFIG['search'],
-                 callbacks=[callbacks.EarlyStopping('val_loss', patience=5)] # CSVLogger callback is also included by the direct src mod.
-                 )
+                 validation_data = (x_val, y_val),
+                 batch_size = batch_size,
+                 epochs = max_epochs,
+                 verbose = 2,
+                 callbacks = [callbacks.EarlyStopping('val_loss', patience=5)] # CSVLogger callback is also included by the direct src mod.
+                )
 
 if __name__ == '__main__':
     # setting env variables for distributed search
     set_environment()
+
+    # limit memory preallocation
+    physical_devices = tf.config.list_physical_devices('GPU')
+    print(physical_devices)
+    tf.config.experimental.set_memory_growth(physical_devices[0], True) # only using a single GPU per trial
 
     # main HPO code
     main()
