@@ -8,8 +8,6 @@
 #SBATCH --mem=192G
 #SBATCH --export=ALL
 #SBATCH --account=atm200007p
-#SBATCH --mail-type=ALL
-#SBATCH --mail-user=sungduk@uci.edu
 #SBATCH -t 00:30:00
 
-srun --mpi=pmi2 --wait=0 bash run-dynamic.p01.sh
+srun --mpi=pmi2 --wait=0 bash run-dynamic.sh
