@@ -136,7 +136,7 @@ def main():
     tuner.search(x_train, y_train,
                  validation_data=(x_val, y_val),
                  **CONFIG['search'],
-                 callbacks=[callbacks.EarlyStopping('val_loss', patience=5)]
+                 callbacks=[callbacks.EarlyStopping('val_loss', patience=5)] # CSVLogger callback is also included by the direct src mod.
                  )
 
 if __name__ == '__main__':
