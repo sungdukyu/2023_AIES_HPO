@@ -3,10 +3,14 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 import os
+from keras import models
+from keras import layers
+from keras import callbacks
+import keras_tuner as kt
 
 ### USER parameters ###
-projname = 'data_volume_sensitivity_p0.01'
-f_dataset = '~/data/p01_all_samples_output_cleaned_shuffled.nc'
+projname = 'P05'
+f_dataset = '~/data/p05_all_samples_output_cleaned_shuffled.nc'
 vars_input  = ['tair', 'pressure', 'rh', 'wbar', 'num_aer', 'r_aer', 'kappa']
 vars_output = ['fn']
 validation_split = 0.2
@@ -60,40 +64,22 @@ def main():
     #1 Load training dataset
     f_orig = xr.open_dataset(f_dataset)
 
-    # Cleaning bad samples
-    # (The input data is already cleaned, so not cleaning here again)
-    if False:
-        # check NaNs
-        for kvar in list(f_orig.variables):
-            n_nans = np.sum(np.isnan(f_orig[kvar].values))
-            print('%s: %d (%.5f)'%(kvar, n_nans, n_nans/f_orig[kvar].size))
-        
-        # check bad samples (-987654{,3,32} is a flag for bad samples)
-        print((np.sum(f_orig['bad_samples'].values == -987654), np.sum(f_orig['timed_out'].values == -9876543),  np.sum(f_orig['super_cooled'].values == -98765432)))
-
-        # remove nans and bad_samples
-        ind_keep = ~( (np.isnan(f_orig['tair'].values))\
-                    +(f_orig['bad_samples'].values == -987654)\
-                    +(f_orig['timed_out'].values == -9876543)\
-                    +(f_orig['super_cooled'].values == -98765432))
-        f_orig=f_orig.isel(nsamples=ind_keep)
-        
     #2 Select variables relevant for emulator 
     f_train  = f_orig[vars_input]  # for input  -> gonna be normalized
     f_train0 = f_orig[vars_output] # for output -> not
 
-    #5 Normalize
+    #3 Normalize
     mu    = f_train.mean('nsamples')
     sigma = f_train.std('nsamples')
     f_train = f_train - mu
     f_train = f_train / sigma
 
-    #6 Vectorize input / output
+    #4 Vectorize input / output
     # (f_train is normalized, but f_train0 is not)
     train_input_vectorized  = vectorize(f_train,  vars_input)  # using f_train
     train_output_vectorized = vectorize(f_train0, vars_output) # using f_train0
 
-    #6.b divide train into train vs validation
+    #5 divide train into train vs validation
     n_train = train_input_vectorized.shape[0]
     n_val   = int(n_train * validation_split)
     x_val   = train_input_vectorized[:n_val]
@@ -101,13 +87,7 @@ def main():
     y_val   = train_output_vectorized[:n_val]
     y_train = train_output_vectorized[n_val:]
 
-    # training
-    from keras import models
-    from keras import layers
-    from keras import callbacks
-    import keras_tuner as kt
-
-    # hypermodel
+    #6 hypermodel
     def build_model(hp):
         model = models.Sequential()
 
@@ -125,20 +105,20 @@ def main():
 
         return model
 
-    # search set up
+    #7 search set up
     tuner = kt.RandomSearch(build_model,
                             project_name = projname,
                             **search_opt
                            )
     tuner.search_space_summary()
 
-    # search
+    #8 search
     tuner.search(x_train, y_train,
                  validation_data = (x_val, y_val),
                  batch_size = batch_size,
                  epochs = max_epochs,
                  verbose = 2,
-                 callbacks = [callbacks.EarlyStopping('val_loss', patience=5)] # CSVLogger callback is also included by the direct src mod.
+                 callbacks = [callbacks.EarlyStopping('val_loss', patience=5)] 
                 )
 
 if __name__ == '__main__':

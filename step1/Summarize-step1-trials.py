@@ -7,7 +7,7 @@ import pickle
 
 RESULTS = {}
 
-for kproj in ['data_volume_sensitivity_p0.01', 'data_volume_sensitivity_p0.05', 'data_volume_sensitivity_p0.10', 'data_volume_sensitivity_p0.20']:
+for kproj in ['P05', 'P25', 'P50', 'P100']:
     dir_results = './results'
     dir_trials = os.path.join(dir_results, kproj, 'trial_*')
     
